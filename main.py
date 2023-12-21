@@ -17,7 +17,32 @@ def image2matrix(image: str) -> np.ndarray:
     return img
 
 
-class denoise_img:
+class denoise_lterative:
+    def __init__(self) -> None:
+        self.t = 10
+
+    def forward(self, image: np.ndarray) -> np.ndarray:
+        delta = np.zeros(image.shape, dtype=np.float64)
+        image_pad = np.pad(image, pad_width=1, mode="edge")
+        operator = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
+        operator = operator * 1 / 10
+        for i in range(0, self.height):
+            for j in range(0, self.width):
+                delta[i][j] = np.sum(image_pad[i : i + 3, j : j + 3] * operator)
+        image = image + delta
+        cv2.imshow("n_image", delta)
+        cv2.waitKey(0)
+        return image
+
+    def denoise(self, image: np.ndarray) -> np.ndarray:
+        self.height = image.shape[1]
+        self.width = image.shape[0]
+        for i in range(self.t):
+            image = self.forward(image)
+        return image
+
+
+class denoise_analytic:
     def __init__(self) -> None:
         self.MAX = 10
         self.a = 1e-6
@@ -47,6 +72,7 @@ class denoise_img:
         self.height = image.shape[1]
         self.width = image.shape[0]
         phi = self.cal_phi(image)
+
         def cal_miu(nx, ny) -> float:
             return (math.pi * nx / self.height) ** 2 + (math.pi * ny / self.width) ** 2
 
@@ -63,7 +89,6 @@ class denoise_img:
                     )
             return max(0, int(result))
 
-
         denoised_image = np.zeros((self.width, self.height), dtype=np.uint8)
         for i in range(self.height):
             for j in range(self.width):
@@ -78,8 +103,12 @@ if __name__ == "__main__":
     images = get_images()
     # cv2.imshow("original_image", image2matrix(images[0]))
     # cv2.waitKey(0)
-    den = denoise_img()
-    denoised_image = den.denoise(image2matrix(images[0]))
-    cv2.imshow("denoised_image", denoised_image)
-    cv2.waitKey(0)
+    # lter = denoise_analytic()
+    # denoised_image = lter.denoise(image2matrix(images[0]))
+    # cv2.imshow("denoised_image", denoised_image)
+    # cv2.waitKey(0)
     # cv2.imwrite("/Users/chris/projects.localized/heat-denoise/data/de/denoised.jpeg", denoised_image)
+    lter = denoise_lterative()
+    denoised_image = lter.denoise(image2matrix(images[0]))
+    # cv2.imshow("denoised_image", denoised_image)
+    # cv2.waitKey(0)
