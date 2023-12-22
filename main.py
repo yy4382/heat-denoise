@@ -17,21 +17,21 @@ def image2matrix(image: str, target_size) -> np.ndarray:
     return img
 
 
-def add_noise(image: np.ndarray) -> np.ndarray:
-    noisy_type = np.random.poisson(lam=20, size=image.shape).astype(dtype="uint8")
+def add_noise(image: np.ndarray, lam: int) -> np.ndarray:
+    noisy_type = np.random.poisson(lam=lam, size=image.shape).astype(dtype="uint8")
     noisy_image = noisy_type + image
     return noisy_image
 
 
 class DenoiseIterative:
-    def __init__(self) -> None:
-        self.t = 5000
+    def __init__(self, a, t) -> None:
+        self.t = t
+        self.a = a
 
     def forward(self, image: np.ndarray) -> np.ndarray:
         delta = np.zeros(image.shape, dtype=np.float64)
 
-        image_pad = np.pad(image, pad_width=1, mode="edge")
-        operator = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]]) / 40.0
+        operator = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]]) * self.a
         delta = cv2.filter2D(image, -1, operator, borderType=cv2.BORDER_REPLICATE)
         img = image + delta
         img = np.clip(img, 0, 255)
@@ -51,29 +51,44 @@ class DenoiseAnalytic:
         self.MAX = MAX
         self.a = a
         self.t = t
+        self.nx = np.array(range(0, self.MAX))
+        self.ny = np.array(range(0, self.MAX))
 
     def cal_phi(self, image: np.ndarray) -> np.ndarray:
         self.height = image.shape[1]
         self.width = image.shape[0]
 
-        nx = np.arange(1, self.MAX, dtype=np.float64)
-        ny = np.arange(1, self.MAX, dtype=np.float64)
-        a = np.cos(np.pi * np.outer(nx, np.arange(0, self.height)) / self.height)
-        b = np.cos(np.pi * np.outer(ny, np.arange(0, self.width)) / self.width)
+        a = np.cos(np.pi * np.outer(self.nx, np.arange(0, self.height)) / self.height)
+        b = np.cos(np.pi * np.outer(self.ny, np.arange(0, self.width)) / self.width)
         phi = np.einsum("ik,jl,kl->ij", a, b, image) * 4.0 / self.width / self.height
+        phi[0, :] = phi[0, :] / 2
+        phi[:, 0] = phi[:, 0] / 2
 
         return phi
 
     def cal_exp(self) -> np.ndarray:
-        nx = np.arange(1, self.MAX)
-        ny = np.arange(1, self.MAX)
-        a = (np.pi * nx / self.height) ** 2
-        b = (np.pi * ny / self.width) ** 2
+        a = (np.pi * self.nx / self.height) ** 2
+        b = (np.pi * self.ny / self.width) ** 2
         miu = np.add.outer(a, b)
         # print(miu.shape)
         exp = np.exp(-self.a * miu * self.t)
         # print("expsize", exp.shape)
         return exp
+
+    def transform(self, original: np.ndarray, target: np.ndarray) -> np.ndarray:
+        mean_original = np.mean(original)
+        mean_target = np.mean(target)
+        std_original = np.std(original)
+        std_target = np.std(target)
+        print(mean_original, mean_target, std_original, std_target)
+        # transformed = (original - mean_original) * std_target / std_original + mean_target
+        # transformed[transformed - mean_target > 3 * float(std_target)] = mean_target
+
+        transformed = original
+
+        # transformed = np.clip(transformed, 0, 255)
+        transformed = np.round(transformed).astype(np.uint8)
+        return transformed
 
     def denoise(self, image: np.ndarray) -> np.ndarray:
         self.height = image.shape[1]
@@ -81,18 +96,13 @@ class DenoiseAnalytic:
 
         exp = self.cal_exp()
         phi = self.cal_phi(image)
-        print(exp.shape, phi.shape)
+        # print(exp.shape, phi.shape)
 
-        a = np.cos(
-            np.pi * np.outer(np.arange(1, self.MAX), np.arange(0, self.height)) / self.height
-        )
-        b = np.cos(np.pi * np.outer(np.arange(1, self.MAX), np.arange(0, self.width)) / self.width)
-        print(a.shape, b.shape)
+        a = np.cos(np.pi * np.outer(self.nx, np.arange(0, self.height)) / self.height)
+        b = np.cos(np.pi * np.outer(self.ny, np.arange(0, self.width)) / self.width)
+        # print(a.shape, b.shape)
         u = np.einsum("ij,kl,ik,ik->jl", a, b, phi, exp)
-        u = u.clip(0, 255)
-        u = np.round(u).astype(np.uint8)
-        print(u)
-        return u
+        return self.transform(u, image)
 
 
 class DenoiseType(Enum):
@@ -104,19 +114,20 @@ if __name__ == "__main__":
     # metadata
     d_type = DenoiseType.ANALYTIC
     target_size = 256
-    a = 1e-2
-    t = 1e-3
-    MAX = 100
+    a = 1
+    t = 1e-1
+    MAX = 1000
+    lam = 10
 
     image_files = get_images()
     image = image2matrix(image_files[0], target_size)
-    noisy_image = add_noise(image)
+    noisy_image = add_noise(image, lam)
 
     if d_type == DenoiseType.ANALYTIC:
         anal = DenoiseAnalytic(a, t, MAX)
         denoised_image = anal.denoise(noisy_image.copy())
     elif d_type == DenoiseType.ITERATIVE:
-        iter_denoiser = DenoiseIterative()
+        iter_denoiser = DenoiseIterative(a=a, t=int(t))
         denoised_image = iter_denoiser.denoise(noisy_image)
     else:
         raise ValueError("DenoiseType is not defined")
