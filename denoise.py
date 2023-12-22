@@ -1,7 +1,33 @@
 import cv2
 import numpy as np
 from enum import Enum
-__all__ = ["DenoiseType", "denoise_img"]
+
+__all__ = ["DenoiseType", "denoise_img", "DenoiseParams"]
+
+
+class DenoiseType(Enum):
+    ANALYTIC = 1
+    ITERATIVE = 2
+
+
+class DenoiseParams:
+    def __init__(
+        self, *, d_type: DenoiseType, a: float, t: int, MAX: int, lam: int, target_size: int = 256
+    ) -> None:
+        self.d_type = d_type
+        self.a = a
+        self.t = t
+        self.MAX = MAX
+        self.lam = lam
+        self.target_size = target_size
+
+    def __str__(self) -> str:
+        basic = f"{self.d_type.name} a={self.a} t={self.t} lam={self.lam}"
+        if self.d_type == DenoiseType.ANALYTIC:
+            return f"{basic} infinity={self.MAX}"
+        else:
+            return basic
+
 
 class DenoiseIterative:
     def __init__(self, a, t) -> None:
@@ -86,12 +112,11 @@ class DenoiseAnalytic:
         return np.round(u).astype(np.uint8)
 
 
-class DenoiseType(Enum):
-    ANALYTIC = 1
-    ITERATIVE = 2
-
-
-def denoise_img(noisy_image: np.ndarray, d_type: DenoiseType, a, t, MAX):
+def denoise_img(noisy_image: np.ndarray, params: DenoiseParams) -> np.ndarray:
+    d_type = params.d_type
+    a = params.a
+    t = params.t
+    MAX = params.MAX
     if d_type == DenoiseType.ANALYTIC:
         anal = DenoiseAnalytic(a, t, MAX)
         denoised_image = anal.denoise(noisy_image.copy())
