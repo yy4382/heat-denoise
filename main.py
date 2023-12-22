@@ -4,8 +4,7 @@ import numpy as np
 from denoise import *
 
 
-def get_images(num=None) -> list:
-    path = "data/original"
+def get_images(path="data/original", num=None) -> list:
     images = [path + "/" + image for image in os.listdir(path)]
     if num is not None:
         return images[:num]
@@ -19,10 +18,26 @@ def image2matrix(image: str, target_size) -> np.ndarray:
     return img
 
 
-def add_noise(image: np.ndarray, lam: int) -> np.ndarray:
-    noisy_type = np.random.poisson(lam=lam, size=image.shape).astype(dtype="uint8")
-    noisy_image = noisy_type + image
-    return noisy_image
+def add_noise(image: np.ndarray, params: DenoiseParams) -> np.ndarray:
+    def gaussian_noise(img: np.ndarray, mean, sigma):
+        img = img / 255
+        noise = np.random.normal(mean, sigma, img.shape)
+        gaussian_out: np.ndarray = img + noise
+        gaussian_out = np.clip(gaussian_out, 0, 1)
+        gaussian_out = (gaussian_out * 255).astype(np.uint8)
+        return gaussian_out
+
+    def poisson_noise(img, lam):
+        noisy_type = np.random.poisson(lam=lam, size=img.shape).astype(dtype="uint8")
+        noisy_image = noisy_type + img
+        return noisy_image
+
+    if params.noise_type == NoiseType.POISSON:
+        return poisson_noise(image, params.poisson_lam)
+    elif params.noise_type == NoiseType.GAUSS:
+        return gaussian_noise(image, params.gaussian_mean, params.gaussian_sigma)
+    else:
+        raise ValueError("Unknown noise type")
 
 
 def generate_image(
@@ -50,28 +65,68 @@ def generate_image(
         str(params),
         (10, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
-        1,
+        0.6,
         (255, 255, 255),
         2,
     )
     imgs = np.vstack((header, imgs, footer))
-    print(imgs.dtype)
     return imgs
 
-
-if __name__ == "__main__":
+def default_main():
+    """
+    默认的main函数，生成带标签的图片
+    """
     # metadata
     params = DenoiseParams(
-        d_type=DenoiseType.ANALYTIC, a=1, t=1, MAX=5000, lam=30, target_size=256
+        d_type=DenoiseType.ITERATIVE,
+        a=1 / 40,
+        t=100000,
+        MAX=20000,
+        lam=35,
+        target_size=256,
+        noise_type=NoiseType.GAUSS,
+        gaussian_mean=0,
+        gaussian_sigma=0.03,
+        poisson_lam=35,
     )
-
-    image_files = get_images()
+    image_files = get_images(num=1)
     images = [image2matrix(image, params.target_size) for image in image_files]
-    noisy_images = [add_noise(image, params.lam) for image in images]
+    noisy_images = [add_noise(image, params) for image in images]
 
     denoised_images = [denoise_img(noisy_image, params) for noisy_image in noisy_images]
-
     result_img = generate_image(images, noisy_images, denoised_images, params)
     cv2.imwrite(f"data/results/{params}.png", result_img)
+    return result_img
+
+def compare_main():
+    """
+    用来搞一些自定义对比
+    """
+    paramsList = []
+    for tt in range(6):
+        paramsList.append(
+            DenoiseParams(
+                d_type=DenoiseType.ANALYTIC,
+                a=1,
+                t=tt/10,
+                MAX=10000,
+                lam=35,
+                target_size=256,
+                noise_type=NoiseType.GAUSS,
+                gaussian_mean=0,
+                gaussian_sigma=0.03,
+                poisson_lam=35,
+            )
+        )
+    image_files = get_images(num=1)
+    images = [image2matrix(image, paramsList[0].target_size) for image in image_files]
+    noisy_images = [add_noise(image, paramsList[0]) for image in images]
+    denoised_images = [denoise_img(noisy_images[0], params1) for params1 in paramsList]
+    result_img = np.hstack(denoised_images)
+    return result_img
+
+if __name__ == "__main__":
+    result_img = compare_main()
+    # result_img = default_main()
     cv2.imshow("imgs", result_img)
     cv2.waitKey(0)

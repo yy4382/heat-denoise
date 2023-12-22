@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 from enum import Enum
 
-__all__ = ["DenoiseType", "denoise_img", "DenoiseParams"]
+__all__ = ["DenoiseType", "denoise_img", "DenoiseParams", "NoiseType"]
 
 
 class DenoiseType(Enum):
@@ -10,9 +10,25 @@ class DenoiseType(Enum):
     ITERATIVE = 2
 
 
+class NoiseType(Enum):
+    GAUSS = 1
+    POISSON = 2
+
+
 class DenoiseParams:
     def __init__(
-        self, *, d_type: DenoiseType, a: float, t: int, MAX: int, lam: int, target_size: int = 256
+        self,
+        *,
+        d_type: DenoiseType,
+        a: float,
+        t: float,
+        MAX: int,
+        lam: int,
+        target_size: int = 256,
+        noise_type: NoiseType = NoiseType.GAUSS,
+        gaussian_mean: float = 0,
+        gaussian_sigma: float = 0.01,
+        poisson_lam: int = 35,
     ) -> None:
         self.d_type = d_type
         self.a = a
@@ -20,13 +36,22 @@ class DenoiseParams:
         self.MAX = MAX
         self.lam = lam
         self.target_size = target_size
+        self.noise_type = noise_type
+        self.gaussian_mean = gaussian_mean
+        self.gaussian_sigma = gaussian_sigma
+        self.poisson_lam = poisson_lam
 
     def __str__(self) -> str:
-        basic = f"{self.d_type.name} a={self.a} t={self.t} lam={self.lam}"
+        basic = f"{self.d_type.name} a={self.a} t={self.t}"
+        noise = f"noise_type={self.noise_type.name}"
+        if self.noise_type == NoiseType.GAUSS:
+            noise += f" mean={self.gaussian_mean} sigma={self.gaussian_sigma}"
+        elif self.noise_type == NoiseType.POISSON:
+            noise += f" lam={self.poisson_lam}"
         if self.d_type == DenoiseType.ANALYTIC:
-            return f"{basic} infinity={self.MAX}"
+            return f"{basic} {noise} infinity={self.MAX}"
         else:
-            return basic
+            return basic + " " + noise
 
 
 class DenoiseIterative:
@@ -77,25 +102,8 @@ class DenoiseAnalytic:
         a = (np.pi * self.nx / self.height) ** 2
         b = (np.pi * self.ny / self.width) ** 2
         miu = np.add.outer(a, b)
-        # print(miu.shape)
         exp = np.exp(-self.a * miu * self.t)
-        # print("expsize", exp.shape)
         return exp
-
-    def transform(self, original: np.ndarray, target: np.ndarray) -> np.ndarray:
-        mean_original = np.mean(original)
-        mean_target = np.mean(target)
-        std_original = np.std(original)
-        std_target = np.std(target)
-        print(mean_original, mean_target, std_original, std_target)
-        # transformed = (original - mean_original) * std_target / std_original + mean_target
-        # transformed[transformed - mean_target > 3 * float(std_target)] = mean_target
-
-        transformed = original
-
-        # transformed = np.clip(transformed, 0, 255)
-        transformed = np.round(transformed).astype(np.uint8)
-        return transformed
 
     def denoise(self, image: np.ndarray) -> np.ndarray:
         self.height = image.shape[1]
@@ -103,7 +111,6 @@ class DenoiseAnalytic:
 
         exp = self.cal_exp()
         phi = self.cal_phi(image)
-        # print(exp.shape, phi.shape)
 
         a = np.cos(np.pi * np.outer(self.nx, np.arange(0, self.height)) / self.height)
         b = np.cos(np.pi * np.outer(self.ny, np.arange(0, self.width)) / self.width)
