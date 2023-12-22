@@ -1,7 +1,7 @@
 import os
 import cv2
 import numpy as np
-import math
+from enum import Enum
 
 
 def get_images() -> list:
@@ -10,29 +10,33 @@ def get_images() -> list:
     return images
 
 
-def image2matrix(image: str) -> np.ndarray:
+def image2matrix(image: str, target_size) -> np.ndarray:
     img = cv2.imread(image)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    img = cv2.resize(img, (256, 256))
+    img = cv2.resize(img, (target_size, target_size))
     return img
 
 
-class denoise_lterative:
+def add_noise(image: np.ndarray) -> np.ndarray:
+    noisy_type = np.random.poisson(lam=20, size=image.shape).astype(dtype="uint8")
+    noisy_image = noisy_type + image
+    return noisy_image
+
+
+class DenoiseIterative:
     def __init__(self) -> None:
-        self.t = 10
+        self.t = 5000
 
     def forward(self, image: np.ndarray) -> np.ndarray:
         delta = np.zeros(image.shape, dtype=np.float64)
+
         image_pad = np.pad(image, pad_width=1, mode="edge")
-        operator = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]])
-        operator = operator * 1 / 10
-        for i in range(0, self.height):
-            for j in range(0, self.width):
-                delta[i][j] = np.sum(image_pad[i : i + 3, j : j + 3] * operator)
-        image = image + delta
-        cv2.imshow("n_image", delta)
-        cv2.waitKey(0)
-        return image
+        operator = np.array([[0, 1, 0], [1, -4, 1], [0, 1, 0]]) / 40.0
+        delta = cv2.filter2D(image, -1, operator, borderType=cv2.BORDER_REPLICATE)
+        img = image + delta
+        img = np.clip(img, 0, 255)
+        img = np.round(img).astype(np.uint8)
+        return img
 
     def denoise(self, image: np.ndarray) -> np.ndarray:
         self.height = image.shape[1]
@@ -42,73 +46,82 @@ class denoise_lterative:
         return image
 
 
-class denoise_analytic:
-    def __init__(self) -> None:
-        self.MAX = 10
-        self.a = 1e-6
-        self.t = 1e-6
+class DenoiseAnalytic:
+    def __init__(self, a, t, MAX) -> None:
+        self.MAX = MAX
+        self.a = a
+        self.t = t
 
     def cal_phi(self, image: np.ndarray) -> np.ndarray:
-        def cal_phi_dot(nx, ny) -> float:
-            result = 0.0
-            for i in range(self.width):
-                for j in range(self.height):
-                    result += (
-                        image[j][i]
-                        * math.cos(math.pi * ny * i / self.width)
-                        * math.cos(math.pi * nx * j / self.height)
-                    )
-            result = result * 4 / self.width / self.height
-            return result
+        self.height = image.shape[1]
+        self.width = image.shape[0]
 
-        phi = np.zeros((self.MAX, self.MAX), dtype=np.float32)
-        for nx in range(1, self.MAX):
-            for ny in range(1, self.MAX):
-                phi[nx][ny] = cal_phi_dot(nx, ny)
-        print(phi)
+        nx = np.arange(1, self.MAX, dtype=np.float64)
+        ny = np.arange(1, self.MAX, dtype=np.float64)
+        a = np.cos(np.pi * np.outer(nx, np.arange(0, self.height)) / self.height)
+        b = np.cos(np.pi * np.outer(ny, np.arange(0, self.width)) / self.width)
+        phi = np.einsum("ik,jl,kl->ij", a, b, image) * 4.0 / self.width / self.height
+
         return phi
+
+    def cal_exp(self) -> np.ndarray:
+        nx = np.arange(1, self.MAX)
+        ny = np.arange(1, self.MAX)
+        a = (np.pi * nx / self.height) ** 2
+        b = (np.pi * ny / self.width) ** 2
+        miu = np.add.outer(a, b)
+        # print(miu.shape)
+        exp = np.exp(-self.a * miu * self.t)
+        # print("expsize", exp.shape)
+        return exp
 
     def denoise(self, image: np.ndarray) -> np.ndarray:
         self.height = image.shape[1]
         self.width = image.shape[0]
+
+        exp = self.cal_exp()
         phi = self.cal_phi(image)
+        print(exp.shape, phi.shape)
 
-        def cal_miu(nx, ny) -> float:
-            return (math.pi * nx / self.height) ** 2 + (math.pi * ny / self.width) ** 2
+        a = np.cos(
+            np.pi * np.outer(np.arange(1, self.MAX), np.arange(0, self.height)) / self.height
+        )
+        b = np.cos(np.pi * np.outer(np.arange(1, self.MAX), np.arange(0, self.width)) / self.width)
+        print(a.shape, b.shape)
+        u = np.einsum("ij,kl,ik,ik->jl", a, b, phi, exp)
+        u = u.clip(0, 255)
+        u = np.round(u).astype(np.uint8)
+        print(u)
+        return u
 
-        def cal_dot(x, y) -> int:
-            result = 0.0
-            for nx in range(1, self.MAX):
-                for ny in range(1, self.MAX):
-                    # print(cal_phi(nx, ny))
-                    result += (
-                        phi[nx][ny]
-                        * math.exp(-self.a * cal_miu(nx, ny) * self.t)
-                        * math.cos(math.pi * nx * x / self.height)
-                        * math.cos(math.pi * ny * y / self.width)
-                    )
-            return max(0, int(result))
 
-        denoised_image = np.zeros((self.width, self.height), dtype=np.uint8)
-        for i in range(self.height):
-            for j in range(self.width):
-                dot = cal_dot(i, j)
-                # assert dot < 0
-                denoised_image[i][j] = dot
-                # print(i, j, dot)
-        return denoised_image
+class DenoiseType(Enum):
+    ANALYTIC = 1
+    ITERATIVE = 2
 
 
 if __name__ == "__main__":
-    images = get_images()
-    # cv2.imshow("original_image", image2matrix(images[0]))
-    # cv2.waitKey(0)
-    # lter = denoise_analytic()
-    # denoised_image = lter.denoise(image2matrix(images[0]))
-    # cv2.imshow("denoised_image", denoised_image)
-    # cv2.waitKey(0)
-    # cv2.imwrite("/Users/chris/projects.localized/heat-denoise/data/de/denoised.jpeg", denoised_image)
-    lter = denoise_lterative()
-    denoised_image = lter.denoise(image2matrix(images[0]))
-    # cv2.imshow("denoised_image", denoised_image)
-    # cv2.waitKey(0)
+    # metadata
+    d_type = DenoiseType.ANALYTIC
+    target_size = 256
+    a = 1e-2
+    t = 1e-3
+    MAX = 100
+
+    image_files = get_images()
+    image = image2matrix(image_files[0], target_size)
+    noisy_image = add_noise(image)
+
+    if d_type == DenoiseType.ANALYTIC:
+        anal = DenoiseAnalytic(a, t, MAX)
+        denoised_image = anal.denoise(noisy_image.copy())
+    elif d_type == DenoiseType.ITERATIVE:
+        iter_denoiser = DenoiseIterative()
+        denoised_image = iter_denoiser.denoise(noisy_image)
+    else:
+        raise ValueError("DenoiseType is not defined")
+
+    imgs = np.hstack((image, noisy_image, denoised_image))
+    cv2.imwrite(f"data/results/{d_type.name}_a{a}_t{t}.png", imgs)
+    cv2.imshow("imgs", imgs)
+    cv2.waitKey(0)
