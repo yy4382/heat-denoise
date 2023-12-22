@@ -126,7 +126,7 @@ def compare_main():
     return result_img
 
 if __name__ == "__main__":
-    result_img = compare_main()
-    # result_img = default_main()
+    # result_img = compare_main()
+    result_img = default_main()
     cv2.imshow("imgs", result_img)
     cv2.waitKey(0)
